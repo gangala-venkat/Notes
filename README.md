@@ -1,4 +1,4 @@
-#How to read build.gradle file in another build.gradle file.
+## How to read build.gradle file in another build.gradle file.
 
 Example Reading version from build.gradle file.
 
