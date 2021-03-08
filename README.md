@@ -30,3 +30,15 @@ private object CryptoAES {
         return String(cipher(Cipher.DECRYPT_MODE, secretKey).doFinal(byteStr))
     }
 } ```
+
+
+how to read Properties from Propety file in kotlin :
+
+```
+@Suppress("UNCHECKED_CAST")
+fun <T> getProp(key: String): T {
+    val props  = javaClass.classLoader.getResourceAsStream("pairs_ids.txt").use {
+        Properties().apply { load(it) }
+    }
+    return (props.getProperty(key) as T) ?: throw RuntimeException("could not find property $key")
+}```
