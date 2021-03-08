@@ -29,10 +29,11 @@ private object CryptoAES {
         val byteStr = decorder.decode(str.toByteArray(Charsets.UTF_8))
         return String(cipher(Cipher.DECRYPT_MODE, secretKey).doFinal(byteStr))
     }
-} ```
+} 
+```
 
 
-how to read Properties from Propety file in kotlin :
+## how to read Properties from Propety file in kotlin :
 
 ```
 @Suppress("UNCHECKED_CAST")
@@ -41,4 +42,5 @@ fun <T> getProp(key: String): T {
         Properties().apply { load(it) }
     }
     return (props.getProperty(key) as T) ?: throw RuntimeException("could not find property $key")
-}```
+}
+```
