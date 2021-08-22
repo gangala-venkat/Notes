@@ -44,3 +44,7 @@ fun <T> getProp(key: String): T {
     return (props.getProperty(key) as T) ?: throw RuntimeException("could not find property $key")
 }
 ```
+
+## Aws Question to Crack Aws Certificate
+
+https://www.examtopics.com/ 
