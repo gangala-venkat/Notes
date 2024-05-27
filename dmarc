@@ -1,0 +1,296 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <global.h>
+#include <nsfnote.h>
+#include <osmem.h>
+#include <osmisc.h>
+#include <kfm.h>
+#include <nsfdb.h>
+#include <nsfdata.h>
+#include <nsfsearc.h>
+
+// Assuming structures defined as above
+typedef struct {
+    long begin;
+    long end;
+} DateRange;
+
+typedef struct {
+    char org_name[50];
+    char email[50];
+    char report_id[10];
+    DateRange date_range;
+} ReportMetadata;
+
+typedef struct {
+    char domain[50];
+    char adkim[2];
+    char aspf[2];
+    char p[10];
+    char sp[10];
+    int pct;
+} PolicyPublished;
+
+typedef struct {
+    char disposition[10];
+    char dkim[10];
+    char spf[10];
+} PolicyEvaluated;
+
+typedef struct {
+    char source_ip[16];
+    int count;
+    PolicyEvaluated policy_evaluated;
+} Row;
+
+typedef struct {
+    char header_from[50];
+} Identifiers;
+
+typedef struct {
+    char domain[50];
+    char result[10];
+    char selector[10];
+} AuthResult;
+
+typedef struct {
+    AuthResult dkim;
+    AuthResult spf;
+} AuthResults;
+
+typedef struct {
+    Row row;
+    Identifiers identifiers;
+    AuthResults auth_results;
+} Record;
+
+typedef struct {
+    Record *records;
+    int record_count;
+    int record_capacity;
+} RecordList;
+
+typedef struct {
+    ReportMetadata *report_metadata;
+    PolicyPublished *policy_published;
+    RecordList *record_lists;
+    int count;
+    int capacity;
+} DmarcReport;
+
+void init_dmarc_report(DmarcReport *report) {
+    report->count = 0;
+    report->capacity = 2;
+    report->report_metadata = malloc(report->capacity * sizeof(ReportMetadata));
+    report->policy_published = malloc(report->capacity * sizeof(PolicyPublished));
+    report->record_lists = malloc(report->capacity * sizeof(RecordList));
+    if (report->report_metadata == NULL || report->policy_published == NULL || report->record_lists == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(EXIT_FAILURE);
+    }
+}
+
+void add_report_policy(DmarcReport *report, ReportMetadata *metadata, PolicyPublished *policy) {
+    if (report->count >= report->capacity) {
+        report->capacity *= 2;
+        report->report_metadata = realloc(report->report_metadata, report->capacity * sizeof(ReportMetadata));
+        report->policy_published = realloc(report->policy_published, report->capacity * sizeof(PolicyPublished));
+        report->record_lists = realloc(report->record_lists, report->capacity * sizeof(RecordList));
+        if (report->report_metadata == NULL || report->policy_published == NULL || report->record_lists == NULL) {
+            fprintf(stderr, "Memory allocation failed\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    report->report_metadata[report->count] = *metadata;
+    report->policy_published[report->count] = *policy;
+    report->record_lists[report->count].records = malloc(2 * sizeof(Record));
+    report->record_lists[report->count].record_count = 0;
+    report->record_lists[report->count].record_capacity = 2;
+    report->count++;
+}
+
+void add_record(DmarcReport *report, int index, Record *record) {
+    if (index >= report->count) {
+        fprintf(stderr, "Invalid index\n");
+        return;
+    }
+    RecordList *record_list = &report->record_lists[index];
+    if (record_list->record_count >= record_list->record_capacity) {
+        record_list->record_capacity *= 2;
+        record_list->records = realloc(record_list->records, record_list->record_capacity * sizeof(Record));
+        if (record_list->records == NULL) {
+            fprintf(stderr, "Memory allocation failed\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    record_list->records[record_list->record_count++] = *record;
+}
+
+int find_report_policy(DmarcReport *report, ReportMetadata *metadata, PolicyPublished *policy) {
+    for (int i = 0; i < report->count; i++) {
+        if (strcmp(report->report_metadata[i].report_id, metadata->report_id) == 0 &&
+            strcmp(report->policy_published[i].domain, policy->domain) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void free_dmarc_report(DmarcReport *report) {
+    for (int i = 0; i < report->count; i++) {
+        free(report->record_lists[i].records);
+    }
+    free(report->report_metadata);
+    free(report->policy_published);
+    free(report->record_lists);
+}
+
+void read_ns_data(DmarcReport *report, DBHANDLE db_handle) {
+    NOTEID note_id;
+    HANDLE note_handle;
+    STATUS status;
+    char field_name[256];
+    char field_value[256];
+    ReportMetadata metadata;
+    PolicyPublished policy;
+    Record record;
+
+    status = NSFDbGetNotes(db_handle, NULL, NULL, NULL, 0, NULL, &note_id);
+    if (status != NOERROR) {
+        fprintf(stderr, "Error getting notes from database: %d\n", status);
+        return;
+    }
+
+    while (status == NOERROR) {
+        status = NSFNoteOpen(db_handle, note_id, 0, &note_handle);
+        if (status != NOERROR) {
+            fprintf(stderr, "Error opening note: %d\n", status);
+            return;
+        }
+
+        // Read fields and assign to structures
+        status = NSFItemGetText(note_handle, "org_name", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(metadata.org_name, field_value);
+        }
+        status = NSFItemGetText(note_handle, "email", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(metadata.email, field_value);
+        }
+        status = NSFItemGetText(note_handle, "report_id", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(metadata.report_id, field_value);
+        }
+        status = NSFItemGetText(note_handle, "date_range_begin", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            metadata.date_range.begin = atol(field_value);
+        }
+        status = NSFItemGetText(note_handle, "date_range_end", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            metadata.date_range.end = atol(field_value);
+        }
+
+        status = NSFItemGetText(note_handle, "domain", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(policy.domain, field_value);
+        }
+        status = NSFItemGetText(note_handle, "adkim", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(policy.adkim, field_value);
+        }
+        status = NSFItemGetText(note_handle, "aspf", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(policy.aspf, field_value);
+        }
+        status = NSFItemGetText(note_handle, "p", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(policy.p, field_value);
+        }
+        status = NSFItemGetText(note_handle, "sp", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(policy.sp, field_value);
+        }
+        status = NSFItemGetText(note_handle, "pct", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            policy.pct = atoi(field_value);
+        }
+
+        int index = find_report_policy(report, &metadata, &policy);
+        if (index == -1) {
+            add_report_policy(report, &metadata, &policy);
+            index = report.count - 1;
+        }
+
+        // Read record fields and assign to record structure
+        status = NSFItemGetText(note_handle, "source_ip", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(record.row.source_ip, field_value);
+        }
+        status = NSFItemGetText(note_handle, "count", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            record.row.count = atoi(field_value);
+        }
+        status = NSFItemGetText(note_handle, "policy_evaluated_disposition", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(record.row.policy_evaluated.disposition, field_value);
+        }
+        status = NSFItemGetText(note_handle, "policy_evaluated_dkim", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(record.row.policy_evaluated.dkim, field_value);
+        }
+        status = NSFItemGetText(note_handle, "policy_evaluated_spf", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(record.row.policy_evaluated.spf, field_value);
+        }
+        status = NSFItemGetText(note_handle, "header_from", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(record.identifiers.header_from, field_value);
+        }
+        status = NSFItemGetText(note_handle, "dkim_domain", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(record.auth_results.dkim.domain, field_value);
+        }
+        status = NSFItemGetText(note_handle, "dkim_result", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(record.auth_results.dkim.result, field_value);
+        }
+        status = NSFItemGetText(note_handle, "dkim_selector", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(record.auth_results.dkim.selector, field_value);
+        }
+        status = NSFItemGetText(note_handle, "spf_domain", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(record.auth_results.spf.domain, field_value);
+        }
+        status = NSFItemGetText(note_handle, "spf_result", field_value, sizeof(field_value));
+        if (status == NOERROR) {
+            strcpy(record.auth_results.spf.result, field_value);
+        }
+
+        add_record(report, index, &record);
+
+        NSFNoteClose(note_handle);
+        status = NSFDbGetNotes(db_handle, NULL, NULL, NULL, 0, NULL, &note_id);
+    }
+}
+
+int main() {
+    DmarcReport report;
+    init_dmarc_report(&report);
+
+    DBHANDLE db_handle;
+    STATUS status = NSFDbOpen("path/to/your/database.nsf", &db_handle);
+    if (status != NOERROR) {
+        fprintf(stderr, "Error opening database: %d\n", status);
+        return EXIT_FAILURE;
+    }
+
+    read_ns_data(&report, db_handle);
+
+    // Process the data as needed...
+
+    free_dmarc_report(&report);
+    NSFDbClose(db_handle);
+    return EXIT_SUCCESS;
+}
