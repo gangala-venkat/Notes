@@ -1,0 +1,115 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+// Assuming the data structures are defined as before
+// (Including ReportMetadata, PolicyPublished, Record, RecordList, and DmarcReport)
+
+// Function to write report metadata to XML
+void write_report_metadata(FILE *file, ReportMetadata *metadata) {
+    fprintf(file, "  <report_metadata>\n");
+    fprintf(file, "    <org_name>%s</org_name>\n", metadata->org_name);
+    fprintf(file, "    <email>%s</email>\n", metadata->email);
+    fprintf(file, "    <report_id>%s</report_id>\n", metadata->report_id);
+    fprintf(file, "    <date_range>\n");
+    fprintf(file, "      <begin>%ld</begin>\n", metadata->date_range.begin);
+    fprintf(file, "      <end>%ld</end>\n", metadata->date_range.end);
+    fprintf(file, "    </date_range>\n");
+    fprintf(file, "  </report_metadata>\n");
+}
+
+// Function to write policy published to XML
+void write_policy_published(FILE *file, PolicyPublished *policy) {
+    fprintf(file, "  <policy_published>\n");
+    fprintf(file, "    <domain>%s</domain>\n", policy->domain);
+    fprintf(file, "    <adkim>%s</adkim>\n", policy->adkim);
+    fprintf(file, "    <aspf>%s</aspf>\n", policy->aspf);
+    fprintf(file, "    <p>%s</p>\n", policy->p);
+    fprintf(file, "    <sp>%s</sp>\n", policy->sp);
+    fprintf(file, "    <pct>%d</pct>\n", policy->pct);
+    fprintf(file, "  </policy_published>\n");
+}
+
+// Function to write records to XML
+void write_record(FILE *file, Record *record) {
+    fprintf(file, "  <record>\n");
+    fprintf(file, "    <row>\n");
+    fprintf(file, "      <source_ip>%s</source_ip>\n", record->row.source_ip);
+    fprintf(file, "      <count>%d</count>\n", record->row.count);
+    fprintf(file, "      <policy_evaluated>\n");
+    fprintf(file, "        <disposition>%s</disposition>\n", record->row.policy_evaluated.disposition);
+    fprintf(file, "        <dkim>%s</dkim>\n", record->row.policy_evaluated.dkim);
+    fprintf(file, "        <spf>%s</spf>\n", record->row.policy_evaluated.spf);
+    fprintf(file, "      </policy_evaluated>\n");
+    fprintf(file, "    </row>\n");
+    fprintf(file, "    <identifiers>\n");
+    fprintf(file, "      <header_from>%s</header_from>\n", record->identifiers.header_from);
+    fprintf(file, "    </identifiers>\n");
+    fprintf(file, "    <auth_results>\n");
+    fprintf(file, "      <dkim>\n");
+    fprintf(file, "        <domain>%s</domain>\n", record->auth_results.dkim.domain);
+    fprintf(file, "        <result>%s</result>\n", record->auth_results.dkim.result);
+    fprintf(file, "        <selector>%s</selector>\n", record->auth_results.dkim.selector);
+    fprintf(file, "      </dkim>\n");
+    fprintf(file, "      <spf>\n");
+    fprintf(file, "        <domain>%s</domain>\n", record->auth_results.spf.domain);
+    fprintf(file, "        <result>%s</result>\n", record->auth_results.spf.result);
+    fprintf(file, "      </spf>\n");
+    fprintf(file, "    </auth_results>\n");
+    fprintf(file, "  </record>\n");
+}
+
+// Function to write the entire DMARC report to XML
+void write_dmarc_report_to_xml(DmarcReport *report, const char *filename) {
+    FILE *file = fopen(filename, "w");
+    if (file == NULL) {
+        perror("Error opening file for writing");
+        exit(EXIT_FAILURE);
+    }
+
+    fprintf(file, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    fprintf(file, "<feedback>\n");
+
+    for (int i = 0; i < report->count; i++) {
+        RecordList *record_list = &report->record_lists[i];
+
+        write_report_metadata(file, &record_list->report_metadata);
+        write_policy_published(file, &record_list->policy_published);
+
+        for (int j = 0; j < record_list->record_count; j++) {
+            write_record(file, &record_list->records[j]);
+        }
+    }
+
+    fprintf(file, "</feedback>\n");
+
+    fclose(file);
+}
+
+int main() {
+    STATUS status = NotesInitExtended(0, NULL);
+    if (status != NOERROR) {
+        fprintf(stderr, "Error initializing Notes: %d\n", status);
+        return EXIT_FAILURE;
+    }
+
+    DmarcReport report;
+    init_dmarc_report(&report);
+
+    DBHANDLE db_handle;
+    status = NSFDbOpen("path/to/your/database.nsf", &db_handle);
+    if (status != NOERROR) {
+        fprintf(stderr, "Error opening database: %d\n", status);
+        NotesTerm();
+        return EXIT_FAILURE;
+    }
+
+    read_ns_data(&report, db_handle);
+
+    // Write the report to an XML file
+    write_dmarc_report_to_xml(&report, "dmarc_report.xml");
+
+    free_dmarc_report(&report);
+    NSFDbClose(db_handle);
+    NotesTerm();
+    return EXIT_SUCCESS;
+}
